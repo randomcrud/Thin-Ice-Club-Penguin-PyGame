@@ -45,18 +45,20 @@ class ThinIceCustom(gym.Env):
     def __init__(self):
         super(ThinIceCustom, self).__init__()
         self.action_space = spaces.Discrete(4) # up, down, left and right
-        
         self.observation_space = spaces.Box(low = 0, high = 1, shape = (HEIGHT, WIDTH), dtype = np.int32)
-        
+        self.level_names = ["level1", "level2", "level3", "level4", "level5", "level6", "level7", "level8", "level9"]
         self.reset()
         
     def load_level(self):
-        level_names = ["level1", "level2", "level3", "level4", "level5", "level6", "level7", "level8", "level9"]
-        m = list(map(lambda x: list(x), open("thin_ice_rl/thin_ice_rl/envs/Levels/" + level_names[self.level_i] + ".txt", "r").read().splitlines()))
-        self.grid = m
-        val_xy = open("thin_ice_rl/thin_ice_rl/envs/Levels/" + level_names[self.level_i] + ".txt", "r").read().splitlines()[15].split(" ")
+        if self.level_i >= len(self.level_names):
+            return False  # No more levels
+        level_name = self.level_names[self.level_i]
+        level_data = open(f"thin_ice_rl/thin_ice_rl/envs/Levels/{level_name}.txt", "r").read().splitlines()
+        self.grid = [list(line) for line in level_data[:-1]]
+        val_xy = level_data[15].split(" ")
         self.start_pos = (int(val_xy[0]) * SQUARE_SIZE, int(val_xy[1]) * SQUARE_SIZE)
-
+        return True
+    
     def reset(self):
         self.level_i = 0
         self.load_level()
@@ -64,9 +66,9 @@ class ThinIceCustom(gym.Env):
         return self.get_observation()
     
     def get_observation(self):
-        max_length = max(len(row) for row in self.grid)
-        uniform_grid = [row + [0] * (max_length - len(row)) for row in self.grid]  # Pad shorter rows with zeros
-        return np.array(uniform_grid)
+    # Convert the grid state into a single integer index
+        grid_index = self.pos_y // SQUARE_SIZE * WIDTH + (self.pos_x // SQUARE_SIZE)
+        return grid_index
     
     def step(self, action):
         if action == 0:  # up
@@ -100,7 +102,11 @@ class ThinIceCustom(gym.Env):
         if self.grid[grid_y][grid_x] == "1":  # Water
             return -1, True  # Penalty and done
         elif self.grid[grid_y][grid_x] == "3":  # Finish
-            return 1, True  # Reward and done
+            self.level_i += 1
+            if not self.load_level():  # Load next level, if available
+                return 1, True  # Game completed
+            self.pos_x, self.pos_y = self.start_pos
+            return 1, False  # Reward and continue
         return 0, False  # No reward and not done
 
 
@@ -125,15 +131,34 @@ class ThinIceCustom(gym.Env):
         fundo.blit(player, (self.pos_x, self.pos_y))
         pygame.display.flip()  # Update the display
 
-
-        
+"""
+# random agent        
 class RandomAgent:
     def __init__(self, action_space):
         self.action_space = action_space
 
     def act(self):
-        return self.action_space.sample()  # Randomly select an action     
-    
+        return self.action_space.sample()  # Randomly select an action  
+"""
+
+class QLearningAgent:
+    def __init__(self, num_actions, num_states):
+        self.num_actions = num_actions
+        self.num_states = num_states
+        self.q_table = np.zeros((num_states, num_actions))  # Initialize Q-table with zeros
+        self.alpha = 0.1  # Learning rate
+        self.gamma = 0.6  # Discount factor
+        self.epsilon = 0.1  # Exploration rate
+
+    def act(self, state):
+        if np.random.uniform(0, 1) < self.epsilon:
+            return np.random.randint(0, self.num_actions)  # Explore
+        else:
+            return np.argmax(self.q_table[state])  # Exploit
+
+    def learn(self, state, action, next_state, reward):
+        # Update Q-table using the Q-learning formula
+        self.q_table[state, action] += self.alpha * (reward + self.gamma * np.max(self.q_table[next_state]) - self.q_table[state, action])
     
 if __name__ == "__main__":
     pygame.init()
@@ -141,21 +166,26 @@ if __name__ == "__main__":
     pygame.display.set_caption("Thin Ice Game")
 
     env = ThinIceCustom()
-    agent = RandomAgent(env.action_space)
+    num_states = HEIGHT * WIDTH  # Total number of states
+    num_actions = env.action_space.n  # Number of actions
+    agent = QLearningAgent(num_actions, num_states)
 
     done = False
     state = env.reset()
 
     while not done:
-        action = agent.act()  # Get action from the agent
+        action = agent.act(state)  # Get action from the agent
         next_state, reward, done, _ = env.step(action)  # Take action in the environment
+        agent.learn(state, action, next_state, reward)  # Update the agent's Q-table
         env.render()  # Render the environment
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 done = True
 
-    pygame.quit()  
+        state = next_state  # Update the current state
+
+    pygame.quit()
     
         
         
